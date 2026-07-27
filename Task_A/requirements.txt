@@ -1,0 +1,8 @@
+sqlite3
+urllib.request
+subprocess
+pathlib
+unittest
+json
+re
+argparse
