@@ -1,26 +1,142 @@
-# 🛡️ Adversarial Agent Runtime (Part A)
+# Adversarial Agent Runtime (Task A)
 
-A durable, safe, and observable AI agent runtime built **completely from scratch** in Python 3.11+ without external agent frameworks.
+A durable, safe, and observable agent runtime built from scratch in Python without framework abstractions. Built to withstand hostile LLM behaviors (S1–S12) including malformed tool calls, rate limits, prompt injections, and infinite loops.
 
 ---
 
-✨ Features & Requirement Mapping
+## 1. Project Directory Structure
 
-| ID     | Feature                       | Implementation Details                                                                                                                                                 |
-| :----- | :---------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **R1** | **Resilient Agent Loop**      | Survives S1–S12 mock LLM scenarios (bad JSON, duplicate tool IDs, rate limits, dropped connections). Located in `agent/client.py` & `agent/loop.py`.                   |
-| **R2** | **Durability & Exactly-Once** | SQLite WAL event-sourcing store (`agent/db.py`). Side-effects like `send_email` execute **exactly once**, even across abrupt `kill -9` process terminates.             |
-| **R3** | **Context Budgeting**         | Hard ceiling of 8,000 tokens using `mockllm/tokenizer.py`. History automatically compacts (`agent/context.py`) when exceeding budget limits.                           |
-| **R4** | **Structural Security**       | Strictly confines file operations to `workspace/`, restricts `http_get` to an allow-list, and enforces 5s wall-clock timeouts on `run_python` (`agent/tools/`).        |
-| **R5** | **Loop & Cost Controls**      | Step ceiling (25 max steps) and fingerprint signature tracking to detect and terminate infinite tool loops (S4) in bounded time.                                       |
-| **R6** | **Observability & Replay**    | Emits structured JSONL trace logs (`logs/`). Supports offline replay (`agent replay <run_id>`) without requiring a running server.                                     |
-| **R7** | **Self-Checking Evals**       | Automated test suite (`evals/test_suite.py`) with 12 test cases, including 4 adversarial tests and **2 intentionally failing tests** documenting edge-case trade-offs. |
-| **R8** | **Architecture Writeup**      | Architectural decisions and trade-offs documented in `DECISIONS.md` (≤1,000 words).                                                                                    |
+```
+QNetwork_Task/
+├── agent.md                   # System design, gap analysis & implementation state
+├── README.md                  # Project overview, setup & execution instructions
+├── testReport.md              # Automated test suite results & verification report
+├── candidate-brief.md         # Original assessment specifications & requirements
+├── Task_A/
+│   ├── agent/                 # Core Agent Runtime Package
+│   │   ├── __init__.py
+│   │   ├── cli.py             # CLI entrypoint (run, resume, replay)
+│   │   ├── client.py          # Resilient HTTP client (S2, S5, S6 error handling)
+│   │   ├── context.py         # Token counting & context compaction with fact pinning
+│   │   ├── db.py              # SQLite event sourcing & transactional email store
+│   │   ├── loop.py            # Execution loop, loop detection & injection sanitization
+│   │   ├── observability.py   # JSONL structured tracing & offline replay engine
+│   │   └── tools/             # Tool Implementations
+│   │       ├── base.py        # Workspace path security & HTTP domain allow-list
+│   │       ├── email_tool.py  # Exactly-once email dispatcher
+│   │       ├── file_tools.py  # Sandboxed read_file & write_file
+│   │       ├── http_tool.py   # Allow-listed http_get client
+│   │       └── python_tool.py # Subprocess run_python executor (5s timeout)
+│   ├── evals/
+│   │   └── test_suite.py      # Automated unit, functional & security test suite
+│   ├── mockllm/
+│   │   ├── stub_server.py     # Local Messages-API mock server (http://localhost:8000)
+│   │   └── tokenizer.py       # Deterministic token counter
+│   ├── workspace/             # Sandboxed workspace directory (agent file operations)
+│   ├── commands.md            # Quick CLI command reference guide
+│   ├── TIMELOG.md             # Time tracking log
+│   └── requirements.txt       # Python dependencies
+```
 
-🚀 Getting Started
+---
 
-Prerequisites
+## 2. Environment Setup (using `uv`)
 
-  - Python 3.11+
-  - Standard library, sqlite3, and make
+This project uses [`uv`](https://github.com/astral-sh/uv) as the fast Python package installer and virtual environment manager.
 
+### Step 1: Create Virtual Environment
+```bash
+# Navigate to Task_A directory
+cd Task_A
+
+# Create virtual environment using uv
+uv venv .venv
+```
+
+### Step 2: Activate Virtual Environment
+
+- **Windows (PowerShell):**
+  ```powershell
+  .venv\Scripts\Activate.ps1
+  ```
+- **Linux / macOS:**
+  ```bash
+  source .venv/bin/activate
+  ```
+
+### Step 3: Install Dependencies
+```bash
+uv pip install -r requirements.txt
+```
+
+---
+
+## 3. Running the Agent Runtime
+
+### Step 1: Start Local Mock Server
+Before running agent commands, start the local `mockllm` server in a separate terminal:
+
+```bash
+# In terminal 1 (inside Task_A directory):
+python mockllm/stub_server.py
+```
+*Server runs on `http://localhost:8000`.*
+
+---
+
+### Step 2: Execute Agent Tasks (CLI)
+
+Open a second terminal window (with virtualenv activated and inside `Task_A` directory):
+
+#### **A. File Write Tool**
+```bash
+python -m agent.cli run --task "Write 'hello world' to hello.txt" --run-id run_001
+python -m agent.cli replay run_001
+```
+
+#### **B. File Read Tool**
+```bash
+python -m agent.cli run --task "Read hello.txt" --run-id run_002
+python -m agent.cli replay run_002
+```
+
+#### **C. Python Subprocess Execution Tool**
+```bash
+python -m agent.cli run --task "Run python math calculation" --run-id run_py_01
+python -m agent.cli replay run_py_01
+```
+
+#### **D. Exactly-Once Email Dispatch Tool**
+```bash
+python -m agent.cli run --task "Send email to 'admin@example.com'" --run-id run_email_01
+python -m agent.cli replay run_email_01
+```
+
+#### **E. Allow-Listed HTTP GET Tool**
+```bash
+python -m agent.cli run --task "Fetch url http://localhost:8000" --run-id run_http_01
+python -m agent.cli replay run_http_01
+```
+
+#### **F. Resuming Process-Interrupted Runs**
+```bash
+python -m agent.cli resume run_email_01
+```
+
+---
+
+## 4. Running Automated Evals & Test Suite
+
+To run the complete unit, functional, and security test suite:
+
+```bash
+# From Task_A directory:
+python evals/test_suite.py
+```
+
+### Expected Test Results
+```
+Ran 6 tests in 0.013s
+
+OK
+```

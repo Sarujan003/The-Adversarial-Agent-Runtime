@@ -69,13 +69,17 @@ class AgentLoop:
                 result = self._dispatch_tool(call_id, tool_name, args)
                 self._log_and_emit("tool_completed", {"call_id": call_id, "result": result})
 
+                # R4 Injection Protection: Sanitize raw tool outputs to prevent prompt override hijacking
+                sanitized_result = str(result).replace("SYSTEM:", "[INJECTION_NEUTRALIZED:]").replace("HUMAN:", "[TEXT:]")
+
                 # Update context
                 self.ctx.add_message("assistant", content)
                 self.ctx.add_message("user", [{
                     "type": "tool_result",
                     "tool_use_id": call_id,
-                    "content": str(result)
+                    "content": sanitized_result
                 }])
+
 
     def _dispatch_tool(self, call_id: str, tool_name: str, args: Dict[str, Any]) -> str:
         if tool_name not in TOOL_REGISTRY:
