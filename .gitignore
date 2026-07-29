@@ -8,13 +8,8 @@ ENV/
 agent_state.db
 logs/
 
-# IDE & OS
-.idea/
-.vscode/
-*.swp
-*.swo
-.DS_Store
-Thumbs.db
 
-mockllm/
 evals/
+
+testReport.md
+commands.md

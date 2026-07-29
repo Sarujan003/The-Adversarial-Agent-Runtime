@@ -1,6 +1,6 @@
-# Core agent loop & step/loop controls (R1, R5)
-
 import json
+import html
+import secrets
 from typing import Dict, Any
 from .db import StateStore
 from .client import ResilientLLMClient
@@ -69,8 +69,16 @@ class AgentLoop:
                 result = self._dispatch_tool(call_id, tool_name, args)
                 self._log_and_emit("tool_completed", {"call_id": call_id, "result": result})
 
-                # R4 Injection Protection: Sanitize raw tool outputs to prevent prompt override hijacking
-                sanitized_result = str(result).replace("SYSTEM:", "[INJECTION_NEUTRALIZED:]").replace("HUMAN:", "[TEXT:]")
+                # R4 Injection Protection (Defense-in-Depth):
+                # 1. Escape HTML/XML entities (< -> &lt;, > -> &gt;)
+                escaped_result = html.escape(str(result))
+                
+                # 2. Generate dynamic secure nonce using `secrets` module
+                nonce = secrets.token_hex(4)
+                tag_name = f"untrusted_content_{nonce}"
+                
+                # 3. Wrap in dynamic randomized XML boundary tags
+                sanitized_result = f"<{tag_name}>\n{escaped_result}\n</{tag_name}>"
 
                 # Update context
                 self.ctx.add_message("assistant", content)
@@ -79,7 +87,6 @@ class AgentLoop:
                     "tool_use_id": call_id,
                     "content": sanitized_result
                 }])
-
 
     def _dispatch_tool(self, call_id: str, tool_name: str, args: Dict[str, Any]) -> str:
         if tool_name not in TOOL_REGISTRY:
