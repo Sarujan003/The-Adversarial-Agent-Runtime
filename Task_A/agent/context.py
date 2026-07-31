@@ -15,8 +15,11 @@ except ImportError:
 
 import re
 
+# MAX_TOKENS = 8000
+# COMPACT_TRIGGER = 7000
+
 MAX_TOKENS = 8000
-COMPACT_TRIGGER = 7000
+COMPACT_TRIGGER = 500
 
 class ContextManager:
     def __init__(self, system_prompt: str = "You are a safe agent. Use tools to solve tasks."):
@@ -44,11 +47,11 @@ class ContextManager:
         # Preserve System (0) and First User Message (1)
         system_msg = self.messages[0]
         initial_user = self.messages[1]
-        recent_turns = self.messages[-4:]
+        recent_turns = self.messages[-1:]
 
-        middle_turns = self.messages[2:-4]
+        middle_turns = self.messages[2:-1]
         facts_summary = "; ".join(self.pinned_facts) if self.pinned_facts else "None"
-        summary_text = f"[COMPACTED: {len(middle_turns)} turns condensed. Pinned Facts Retained: {facts_summary}]"
+        summary_text = f"[COMPACTED: {len(middle_turns)} turns condensed. Pinned Facts Retained]"
 
         self.messages = [
             system_msg,
@@ -56,3 +59,7 @@ class ContextManager:
             {"role": "user", "content": summary_text},
             {"role": "assistant", "content": "Compacted history acknowledged. Continuing task with retained state."}
         ] + recent_turns
+
+        # After compaction, check if we are still over the hard limit.
+        if self.get_token_count() > MAX_TOKENS:
+            raise ValueError(f"Context budget of {MAX_TOKENS} tokens exceeded even after compaction.")

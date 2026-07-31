@@ -1,7 +1,14 @@
 # stub_server.py
 import json
 import re
+from pathlib import Path
+import random
 from http.server import HTTPServer, BaseHTTPRequestHandler
+
+SCENARIOS_DIR = Path(__file__).parent / "scenarios"
+S5_RESET_TRACKER = set()
+S6_SEQUENCE_TRACKER = {}
+MULTI_TURN_TRACKER = {}
 
 class DynamicLLMHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -11,12 +18,98 @@ class DynamicLLMHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"<html><body><h1>Mock HTTP Server Response OK</h1></body></html>")
 
     def do_POST(self):
-
         content_length = int(self.headers.get('Content-Length', 0))
         body = self.rfile.read(content_length)
         payload = json.loads(body.decode('utf-8'))
-
         messages = payload.get("messages", [])
+
+        # Handle Scenarios First
+        scenario_id = self.headers.get('X-Scenario-ID')
+        if scenario_id:
+            scenario_file = SCENARIOS_DIR / f"{scenario_id.lower()}.json"
+            if scenario_file.exists():
+                # S6: Rate limit simulation (random sequence of 429/529, then 200)
+                if scenario_id.lower() == 's6':
+                    run_id = self.headers.get('X-Run-ID')
+                    if run_id:
+                        if run_id not in S6_SEQUENCE_TRACKER:
+                            num_errors = random.randint(2, 3)
+                            S6_SEQUENCE_TRACKER[run_id] = random.choices([429, 529], k=num_errors)
+
+                        if S6_SEQUENCE_TRACKER.get(run_id):
+                            error_code = S6_SEQUENCE_TRACKER[run_id].pop(0)
+                            self.send_response(error_code)
+                            self.send_header('Content-Type', 'application/json')
+                            if error_code == 429:
+                                self.send_header('Retry-After', '1')
+                            self.end_headers()
+                            self.wfile.write(b'{"error": "Rate limit or overload"}')
+                            return
+                        
+                        # If error sequence is done, serve the 200 OK response ONCE.
+                        # On subsequent calls, the agent will have sent a tool_result, so we fall through.
+                        last_msg = messages[-1] if messages else {}
+                        if last_msg.get("role") == "user" and isinstance(last_msg.get("content"), str): # First turn
+                            self.send_response(200); self.send_header('Content-Type', 'application/json'); self.end_headers()
+                            self.wfile.write(scenario_file.read_bytes()); return
+                # S5: Connection reset simulation
+                elif scenario_id.lower() == 's5':
+                    run_id = self.headers.get('X-Run-ID')
+                    if run_id and run_id not in S5_RESET_TRACKER:
+                        S5_RESET_TRACKER.add(run_id)
+                        full_content = scenario_file.read_bytes()
+                        # Send a partial response then close the connection
+                        self.send_response(200)
+                        self.send_header('Content-Type', 'application/json')
+                        # Lie about content length to trigger IncompleteRead on client
+                        self.send_header('Content-Length', str(len(full_content)))
+                        self.end_headers()
+                        self.wfile.write(full_content[:15]) # Write a small, incomplete chunk
+                        # By not finishing the write, we simulate a connection reset.
+                        return
+
+                # S4, S7, S8, S9: Handle multi-turn scenarios.
+                elif scenario_id.lower() in ['s4', 's7', 's8', 's9']:
+                    try:
+                        scenario_data = json.loads(scenario_file.read_text(encoding="utf-8"))
+                        if isinstance(scenario_data, list):
+                            run_id = self.headers.get('X-Run-ID')
+                            if run_id not in MULTI_TURN_TRACKER:
+                                MULTI_TURN_TRACKER[run_id] = 0
+                            turn_index = MULTI_TURN_TRACKER[run_id]
+                            
+                            if scenario_id.lower() == 's4': # Infinite loop
+                                response_index = min(turn_index, len(scenario_data) - 1)
+                                response = scenario_data[response_index]
+                                self.send_response(200); self.send_header('Content-Type', 'application/json'); self.end_headers()
+                                self.wfile.write(json.dumps(response).encode('utf-8'))
+                                if turn_index < len(scenario_data) - 1:
+                                    MULTI_TURN_TRACKER[run_id] += 1
+                                return
+
+                            if scenario_id.lower() in ['s7', 's8', 's9']: # Sequential, then stop
+                                if turn_index >= len(scenario_data):
+                                    # If we run out of scripted turns, end the conversation gracefully.
+                                    response = {"content": [{"type": "text", "text": "Scenario ended."}]}
+                                else:
+                                    response = scenario_data[turn_index]
+                                self.send_response(200); self.send_header('Content-Type', 'application/json'); self.end_headers()
+                                self.wfile.write(json.dumps(response).encode('utf-8'))
+                                MULTI_TURN_TRACKER[run_id] += 1
+                                return
+
+                    except json.JSONDecodeError:
+                        pass # Fall through if s4.json is not a valid list
+
+                # Single-turn scenarios (S1, S2, S3)
+                elif scenario_id.lower() in ['s1', 's2', 's3']:
+                    last_msg = messages[-1] if messages else {}
+                    is_first_turn = last_msg.get("role") == "user" and isinstance(last_msg.get("content"), str)
+                    if is_first_turn:
+                        self.send_response(200); self.send_header('Content-Type', 'application/json'); self.end_headers()
+                        self.wfile.write(scenario_file.read_bytes()); return
+
+        # Fallback to dynamic logic if no scenario was handled
         last_msg = messages[-1] if messages else {}
         last_content = str(last_msg.get("content", ""))
 

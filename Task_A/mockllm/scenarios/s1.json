@@ -1,0 +1,13 @@
+{
+    "content": [
+        {
+            "type": "tool_use",
+            "id": "call_s1_write_file",
+            "name": "write_file",
+            "input": {
+                "path": "s1_test.txt",
+                "content": "This is a test for the S1 happy path."
+            }
+        }
+    ]
+}

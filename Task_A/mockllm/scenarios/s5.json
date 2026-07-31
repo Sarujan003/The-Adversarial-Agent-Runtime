@@ -1,0 +1,13 @@
+{
+    "content": [
+        {
+            "type": "tool_use",
+            "id": "call_s5_write_file",
+            "name": "write_file",
+            "input": {
+                "path": "s5_test.txt",
+                "content": "This is a test for the S5 connection reset scenario."
+            }
+        }
+    ]
+}

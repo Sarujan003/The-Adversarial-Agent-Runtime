@@ -1,0 +1,12 @@
+{
+    "content": [
+        {
+            "type": "tool_use",
+            "id": "call_s3_no_tool",
+            "name": "non_existent_tool",
+            "input": {
+                "arg1": "value1"
+            }
+        }
+    ]
+}

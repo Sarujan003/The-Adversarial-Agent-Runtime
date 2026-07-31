@@ -1,0 +1,25 @@
+[
+  {
+    "content": [
+      {
+        "type": "tool_use",
+        "id": "call_duplicate_id",
+        "name": "write_file",
+        "input": {
+          "path": "s9_test.txt",
+          "content": "First call with this ID."
+        }
+      }
+    ]
+  },
+  {
+    "content": [
+      {
+        "type": "tool_use",
+        "id": "call_duplicate_id",
+        "name": "read_file",
+        "input": { "path": "s9_test.txt" }
+      }
+    ]
+  }
+]

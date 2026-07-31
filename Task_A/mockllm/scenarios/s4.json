@@ -1,0 +1,42 @@
+[
+    {
+        "content": [
+            {
+                "type": "tool_use",
+                "id": "call_s4_loop_1",
+                "name": "read_file",
+                "input": { "path": "dummy.txt" }
+            }
+        ]
+    },
+    {
+        "content": [
+            {
+                "type": "tool_use",
+                "id": "call_s4_loop_2",
+                "name": "read_file",
+                "input": { "path": "dummy.txt" }
+            }
+        ]
+    },
+    {
+        "content": [
+            {
+                "type": "tool_use",
+                "id": "call_s4_loop_3",
+                "name": "read_file",
+                "input": { "path": "dummy.txt" }
+            }
+        ]
+    },
+    {
+        "content": [
+            {
+                "type": "tool_use",
+                "id": "call_s4_loop_4",
+                "name": "read_file",
+                "input": { "path": "dummy.txt" }
+            }
+        ]
+    }
+]

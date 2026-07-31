@@ -1,0 +1,13 @@
+{
+    "content": [
+        {
+            "type": "tool_use",
+            "id": "call_s6_write_file",
+            "name": "write_file",
+            "input": {
+                "path": "s6_test.txt",
+                "content": "This is a test for the S6 rate limit scenario."
+            }
+        }
+    ]
+}
