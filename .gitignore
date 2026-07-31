@@ -9,7 +9,7 @@ agent_state.db
 logs/
 
 
-evals/
-
 testReport.md
 commands.md
+
+graph.md
