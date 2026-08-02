@@ -1,0 +1,22 @@
+{
+  "content": [
+    {
+      "type": "tool_use",
+      "id": "call_s10_fail",
+      "name": "read_file",
+      "input": { "path": "non_existent_file.txt" }
+    },
+    {
+      "type": "tool_use",
+      "id": "call_s10_hang",
+      "name": "run_python",
+      "input": { "code": "import time; time.sleep(10)" }
+    },
+    {
+      "type": "tool_use",
+      "id": "call_s10_ok",
+      "name": "write_file",
+      "input": { "path": "s10_test.txt", "content": "S10 success" }
+    }
+  ]
+}

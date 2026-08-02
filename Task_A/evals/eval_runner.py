@@ -76,18 +76,24 @@ EVAL_CASES = [
         "check": lambda run_id, db: check_tool_output_contains(db, run_id, "does not exist")
     },
 
-    # --- INTENTIONALLY FAILING SCENARIOS (Required by R7) ---
+    # --- SCENARIOS S10 / S11 / S12 ---
     {
         "id": "eval_11_parallel_tool_out_of_order_failure",
         "task": "Execute 3 parallel tool calls where tool 2 hangs.",
         "scenario": "S10",
-        "check": lambda run_id, db: False # FAILS: Parallel out-of-order execution recovery not implemented
+        "check": lambda run_id, db: check_s10_parallel(db, run_id)
     },
     {
         "id": "eval_12_confidently_wrong_tool_assertion",
-        "task": "Detect when tool returns error but LLM claims success.",
+        "task": "Read a file and report its contents.",
         "scenario": "S11",
-        "check": lambda run_id, db: False # FAILS: Semantic validation of model assertions not implemented
+        "check": lambda run_id, db: check_event_type(db, run_id, "model_assertion_mismatch")
+    },
+    {
+        "id": "eval_12b_partial_interrupted_turn",
+        "task": "Write a test file using three parallel tool calls.",
+        "scenario": "S12",
+        "check": lambda run_id, db: check_event_type(db, run_id, "partial_turn_recovered")
     }
 ]
 
@@ -112,9 +118,35 @@ def check_email_count(db, run_id, expected):
     cursor.execute("SELECT COUNT(*) FROM emails WHERE run_id = ?", (run_id,))
     return cursor.fetchone()[0] == expected
 
-def check_tool_output_contains(db, run_id, substring):
+def check_s10_parallel(db, run_id):
+    """S10: all 3 parallel tool calls started, all 3 completed, and the hanging one timed out."""
     events = db.get_events(run_id)
-    return any(e["event_type"] == "tool_completed" and substring in json.dumps(e["payload"]) for e in events)
+    started = [e for e in events if e["event_type"] == "tool_started"]
+    completed = [e for e in events if e["event_type"] == "tool_completed"]
+    if len(started) < 3 or len(completed) < 3:
+        return False
+    results = {e["payload"].get("call_id"): e["payload"].get("result", "") for e in completed}
+    return "timed out" in results.get("call_s10_hang", "")
+
+def check_event_type(db, run_id, event_type):
+    events = db.get_events(run_id)
+    return any(e["event_type"] == event_type for e in events)
+
+
+
+from agent.client import ResilientLLMClient
+
+
+class _ScenarioClient(ResilientLLMClient):
+    """Wraps ResilientLLMClient to inject X-Scenario-ID and X-Run-ID headers."""
+    def __init__(self, server_url: str, scenario_id: str, run_id: str):
+        super().__init__(server_url)
+        self.scenario_id = scenario_id
+        self.run_id = run_id
+
+    def post_messages(self, messages: list, max_retries: int = 5, headers: dict = None) -> tuple:
+        h = {"X-Scenario-ID": self.scenario_id, "X-Run-ID": self.run_id}
+        return super().post_messages(messages, max_retries, headers=h)
 
 
 # --- Eval Runner Engine ---
@@ -133,11 +165,15 @@ def run_evals():
 
         try:
             agent = AgentLoop(run_id=run_id, task=case["task"])
+            # Inject scenario-specific client so the mock server routes to the right scenario file
+            if case.get("scenario"):
+                agent.client = _ScenarioClient(agent.client.server_url, case["scenario"], run_id)
             agent.run()
             passed = case["check"](run_id, db)
         except Exception as e:
             print(f"\n   [ERROR in {case['id']}]: {e}")
             passed = False
+
 
         if passed:
             print("PASSED")

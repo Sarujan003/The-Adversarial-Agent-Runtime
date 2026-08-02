@@ -1,0 +1,24 @@
+[
+    {
+        "content": [
+            {
+                "type": "tool_use",
+                "id": "call_s12_partial",
+                "name": "write_file",
+                "input": {
+                    "path": "s12_test.txt",
+                    "content": "S12 partial turn recovered"
+                }
+            }
+        ],
+        "_partial": true
+    },
+    {
+        "content": [
+            {
+                "type": "text",
+                "text": "Task finished. The partial turn was recovered and the write completed."
+            }
+        ]
+    }
+]

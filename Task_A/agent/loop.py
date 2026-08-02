@@ -1,6 +1,7 @@
 import json
 import html
 import secrets
+import concurrent.futures
 from typing import Dict, Any
 from .db import StateStore
 from .client import ResilientLLMClient
@@ -25,6 +26,10 @@ class AgentLoop:
         self.store.append_event(self.run_id, self.seq, event_type, payload)
         self.tracer.emit(self.run_id, self.seq, event_type, payload)
 
+    def close(self):
+        """Closes any open resources, like the database connection."""
+        self.store.close()
+
     def run(self):
         events = self.store.get_events(self.run_id)
         if not events:
@@ -34,7 +39,8 @@ class AgentLoop:
             self.seq = max(e["seq"] for e in events)
 
         step = 0
-        while step < self.max_steps:
+        should_stop = False
+        while step < self.max_steps and not should_stop:
             step += 1
             try:
                 self.ctx.compact_if_needed()
@@ -47,7 +53,7 @@ class AgentLoop:
                 raise e # Re-raise other unexpected ValueErrors
 
             try:
-                response = self.client.post_messages(self.ctx.messages)
+                response, salvage_used = self.client.post_messages(self.ctx.messages)
                 print("Received response from MockLLM:", response)
             except TimeoutError as e: # Client raises TimeoutError after exhausting retries
                 self._log_and_emit("error", {"message": str(e)})
@@ -55,6 +61,10 @@ class AgentLoop:
             except Exception as e: # Catch any other unexpected errors during client communication
                 self._log_and_emit("error", {"message": f"Unexpected client communication error: {str(e)}"})
                 break
+
+            # S12: Partial / interrupted turn — surface observability event when salvage was used
+            if salvage_used:
+                self._log_and_emit("partial_turn_recovered", {"note": "Response was incomplete; _salvage_json recovered a partial turn."})
 
             content = response.get("content", [])
             tool_calls = [c for c in content if isinstance(c, dict) and c.get("type") == "tool_use"]
@@ -68,12 +78,54 @@ class AgentLoop:
                 if "Task finished" in text_response or "Scenario ended" in text_response:
                     self._log_and_emit("completed", {"response": response})
                     break
+
+                # S11: Confidently wrong — model claims success when a prior tool returned an error.
+                # Detect this by checking if the previous user message contained error tool results
+                # while the model's text response asserts success.
+                SUCCESS_PHRASES = ("successfully", "completed", "done", "retrieved", "finished", "achieved")
+                ERROR_PREFIXES = ("Error:", "Error executing", "FileNotFoundError", "does not exist")
+                prev_messages = self.ctx.messages
+                last_tool_results = []
+                for m in reversed(prev_messages):
+                    if m.get("role") == "user" and isinstance(m.get("content"), list):
+                        last_tool_results = [
+                            c for c in m["content"]
+                            if isinstance(c, dict) and c.get("type") == "tool_result"
+                        ]
+                        break
+                prior_had_errors = any(
+                    any(pfx in str(c.get("content", "")) for pfx in ERROR_PREFIXES)
+                    for c in last_tool_results
+                )
+                model_claims_success = any(p in text_response.lower() for p in SUCCESS_PHRASES)
+                if prior_had_errors and model_claims_success:
+                    self._log_and_emit("model_assertion_mismatch", {
+                        "model_text": text_response,
+                        "note": "Model claimed success after tool returned an error."
+                    })
+                    # Inject a corrective message so the model knows the real state
+                    error_details = "; ".join(
+                        str(c.get("content", ""))[:120]
+                        for c in last_tool_results
+                        if any(pfx in str(c.get("content", "")) for pfx in ERROR_PREFIXES)
+                    )
+                    self.ctx.add_message(
+                        "user",
+                        f"Correction: One or more tools actually returned an error. "
+                        f"Please acknowledge the failure and try a different approach. Error details: {error_details}"
+                    )
+                    continue
+
                 # Otherwise, assume it's a multi-turn text conversation (like S8) and prompt to continue.
                 self.ctx.add_message("user", "Please continue.")
                 continue # Go to next loop iteration
 
             # --- Tool call processing ---
+            # R1/S10: Handle parallel tool calls with failures and hangs
             tool_results_for_ctx = []
+            calls_to_dispatch = []
+
+            # Pre-dispatch checks (must be done sequentially)
             for call in tool_calls:
                 call_id = call.get("id", "call_unknown")
                 tool_name = call.get("name")
@@ -83,59 +135,74 @@ class AgentLoop:
                 sig = f"{tool_name}:{json.dumps(args, sort_keys=True)}"
                 if self.call_history.count(sig) >= 3:
                     self._log_and_emit("terminated", {"reason": f"Infinite loop detected on tool '{tool_name}'"})
-                    return
+                    should_stop = True
+                    break
                 self.call_history.append(sig)
 
                 # R4 Guardrail: Block privileged tools if they immediately follow a data-ingesting tool call.
                 PRIVILEGED_TOOLS = {"send_email"}
-                if tool_name in PRIVILEGED_TOOLS:
-                    # Check if the last message sent to the LLM was a tool result.
-                    # The message before the assistant's current turn (-2) is the one that prompted this tool call.
-                    last_user_msg = self.ctx.messages[-2] if len(self.ctx.messages) > 1 else None
-                    is_prev_msg_tool_result = (
-                        last_user_msg and last_user_msg.get('role') == 'user' and
-                        isinstance(last_user_msg.get('content'), list) and
-                        any(c.get('type') == 'tool_result' for c in last_user_msg['content'])
-                    )
-                    if is_prev_msg_tool_result:
-                        rejection_reason = f"Security policy violation: Privileged tool '{tool_name}' was blocked because it was called immediately after a tool returned data. This is a defense against prompt injection."
-                        self._log_and_emit("tool_rejected", {"call_id": call_id, "tool": tool_name, "reason": rejection_reason})
-                        result = f"Error: {rejection_reason}"
-                        tool_results_for_ctx.append({
-                            "type": "tool_result",
-                            "tool_use_id": call_id,
-                            "content": result # This system-generated error does not need sanitization
-                        })
-                        continue # Skip to the next tool call
-
+                last_user_msg = self.ctx.messages[-2] if len(self.ctx.messages) > 1 else None
+                is_prev_msg_tool_result = (
+                    last_user_msg and last_user_msg.get('role') == 'user' and
+                    isinstance(last_user_msg.get('content'), list) and
+                    any(c.get('type') == 'tool_result' for c in last_user_msg['content'])
+                )
+                if tool_name in PRIVILEGED_TOOLS and is_prev_msg_tool_result:
+                    rejection_reason = f"Security policy violation: Privileged tool '{tool_name}' was blocked because it was called immediately after a tool returned data. This is a defense against prompt injection."
+                    self._log_and_emit("tool_rejected", {"call_id": call_id, "tool": tool_name, "reason": rejection_reason})
+                    result = f"Error: {rejection_reason}"
+                    tool_results_for_ctx.append({
+                        "type": "tool_result",
+                        "tool_use_id": call_id,
+                        "content": result # This system-generated error does not need sanitization
+                    })
+                    continue # Skip dispatching this call
+                
                 self._log_and_emit("tool_started", {"call_id": call_id, "tool": tool_name})
-                
-                # Execute Tool
-                result = self._dispatch_tool(call_id, tool_name, args)
-                self._log_and_emit("tool_completed", {"call_id": call_id, "result": result})
+                calls_to_dispatch.append(call)
 
-                # R4 Injection Protection (Defense-in-Depth):
-                # 1. Escape HTML/XML entities (< -> &lt;, > -> &gt;)
-                escaped_result = html.escape(str(result))
-                
-                # 2. Generate dynamic secure nonce using `secrets` module
-                nonce = secrets.token_hex(4)
-                tag_name = f"untrusted_content_{nonce}"
-                
-                # 3. Wrap in dynamic randomized XML boundary tags
-                sanitized_result = f"<{tag_name}>\n{escaped_result}\n</{tag_name}>"
+            # If the loop-detection logic decided to stop, break out of the main while loop now.
+            if should_stop:
+                break
 
-                # in real development, can use llama guard2 model to classify the known vulnerabilities.
-                # after the classification, can block the remaining execution.
+            # Concurrent dispatch of valid calls
+            if calls_to_dispatch:
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future_to_call = {
+                        executor.submit(self._dispatch_tool, call.get("id"), call.get("name"), call.get("input", {})): call
+                        for call in calls_to_dispatch
+                    }
 
-                # or can create vector database for the known vulnerabilities,
-                # and then can use the vector database to classify the known vulnerabilities.
+                    # Wait for futures with a timeout (slightly longer than python_tool's internal timeout)
+                    done, not_done = concurrent.futures.wait(future_to_call.keys(), timeout=7.0)
 
-                tool_results_for_ctx.append({
-                    "type": "tool_result",
-                    "tool_use_id": call_id,
-                    "content": sanitized_result
-                })
+                    # Process completed futures (success or failure)
+                    for future in done:
+                        call = future_to_call[future]
+                        try:
+                            result = future.result()
+                        except Exception as e:
+                            result = f"Error executing tool '{call.get('name')}': {str(e)}"
+                        
+                        self._log_and_emit("tool_completed", {"call_id": call.get("id"), "result": result})
+                        
+                        # Sanitize and prepare for context
+                        escaped_result = html.escape(str(result))
+                        nonce = secrets.token_hex(4)
+                        tag_name = f"untrusted_content_{nonce}"
+                        sanitized_result = f"<{tag_name}>\n{escaped_result}\n</{tag_name}>"
+                        tool_results_for_ctx.append({"type": "tool_result", "tool_use_id": call.get("id"), "content": sanitized_result})
+
+                    # Process timed-out (hanging) futures
+                    for future in not_done:
+                        call = future_to_call[future]
+                        result = f"Error: Tool '{call.get('name')}' timed out."
+                        self._log_and_emit("tool_completed", {"call_id": call.get("id"), "result": result})
+                        escaped_result = html.escape(str(result))
+                        nonce = secrets.token_hex(4)
+                        tag_name = f"untrusted_content_{nonce}"
+                        sanitized_result = f"<{tag_name}>\n{escaped_result}\n</{tag_name}>"
+                        tool_results_for_ctx.append({"type": "tool_result", "tool_use_id": call.get("id"), "content": sanitized_result})
 
             # Add all tool results for this turn to the context
             if tool_results_for_ctx:

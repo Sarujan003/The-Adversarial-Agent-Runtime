@@ -1,77 +1,90 @@
-# Task A CLI Command Reference & Test Guide
+# Task A CLI Command Reference & Evaluation Guide
 
-This document lists all available CLI commands to test and verify the tools and requirements implemented in Task A.
+This document provides a comprehensive command reference for testing, running, and evaluating all core tools and adversarial scenarios (S1–S12) implemented in **Task A**.
 
 ---
 
-## 1. File Tools (`read_file`, `write_file`)
+## 1. Environment & Server Startup
 
-### Read File
+Before running any CLI or evaluation commands, activate your virtual environment and start the `mockllm` server:
+
 ```bash
-# Execute task to read a workspace file
-python -m agent.cli run --task "Read dummy.txt" --run-id run_read_01
+# Navigate to Task_A directory
+cd Task_A
 
-# Replay offline trace
+# Activate virtual environment (PowerShell)
+.venv\Scripts\Activate.ps1
+
+# Terminal 1: Start MockLLM stub server (http://localhost:8000)
+python mockllm/stub_server.py
+```
+
+---
+
+## 2. Standalone Tool Execution Commands
+
+Run task executions against the local agent runtime in Terminal 2:
+
+### A. File Tools (`read_file`, `write_file`)
+```bash
+# Write file
+python -m agent.cli run --task "Write 'Hello Task A' to notes.txt" --run-id run_write_01
+python -m agent.cli replay run_write_01
+
+# Read file
+python -m agent.cli run --task "Read notes.txt" --run-id run_read_01
 python -m agent.cli replay run_read_01
 ```
 
-### Write File
+### B. Subprocess Execution (`run_python`)
 ```bash
-# Execute task to write a workspace file
-python -m agent.cli run --task "Write notes.txt with content 'Hello from CLI'" --run-id run_write_01
-
-# Replay offline trace
-python -m agent.cli replay run_write_01
-```
-
----
-
-## 2. Python Code Execution (`run_python`)
-
-```bash
-# Execute python code snippet
-python -m agent.cli run --task "Run python math calculation" --run-id run_py_01
-
-# Replay offline trace
+python -m agent.cli run --task "Run python code 'for i in range(1, 4): print(i)'" --run-id run_py_01
 python -m agent.cli replay run_py_01
-
-# Example 2: Loop execution
-python -m agent.cli run --task "Run python code 'for i in range(1, 4): print(i)'" --run-id run_py_07
-python -m agent.cli replay run_py_07
 ```
 
----
-
-## 3. Email Side-Effect & Exactly-Once Durability (`send_email`)
-
+### C. Exactly-Once Email Dispatch (`send_email`)
 ```bash
-# Send simulated email (appends row to SQLite emails table)
-python -m agent.cli run --task "Send email to 'admin@example.com'" --run-id run_email_01
-
-# Replay offline trace
+python -m agent.cli run --task "Send email to 'admin@example.com' subject 'Test' body 'Hello'" --run-id run_email_01
 python -m agent.cli replay run_email_01
 
-# Resume task run after process interrupt/kill
+# Resume run after process kill (kill -9)
 python -m agent.cli resume run_email_01
 ```
 
----
-
-## 4. HTTP Allow-List Client (`http_get`)
-
+### D. Allow-Listed HTTP Client (`http_get`)
 ```bash
-# Fetch from allowed local endpoint
 python -m agent.cli run --task "Fetch url http://localhost:8000" --run-id run_http_01
-
-# Replay offline trace
 python -m agent.cli replay run_http_01
 ```
 
 ---
 
-## 5. Automated Evaluation & Security Suite
+## 3. Adversarial Scenario Evaluation Suite (S1–S12)
+
+Run scenario evaluation scripts under `evals/`:
 
 ```bash
-# Run Unit & Adversarial Security Test Suite
-python Task_A/evals/test_suite.py
+# Run all 12 scenario test files
+python evals/test_s1_happy_path.py
+python evals/test_s2_malformed_json.py
+python evals/test_s3_nonexistent_tool.py
+python evals/test_s4_infinite_loop.py
+python evals/test_s5_connection_reset.py
+python evals/test_s6_rate_limit.py
+python evals/test_s7_prompt_injection.py
+python evals/test_s8_context_budget.py
+python evals/test_s9_duplicate_ids.py
+python evals/test_s10_parallel_calls.py
+python evals/test_s11_confidently_wrong.py
+python evals/test_s12_partial_turn.py
+```
+
+---
+
+## 4. Offline Replay Commands
+
+Inspect stored event traces for any run without contacting the LLM server:
+
+```bash
+python -m agent.cli replay <run_id>
 ```

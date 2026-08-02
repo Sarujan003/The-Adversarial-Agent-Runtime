@@ -65,11 +65,16 @@ class DynamicLLMHandler(BaseHTTPRequestHandler):
                         self.send_header('Content-Length', str(len(full_content)))
                         self.end_headers()
                         self.wfile.write(full_content[:15]) # Write a small, incomplete chunk
-                        # By not finishing the write, we simulate a connection reset.
                         return
+                    else:
+                        last_msg = messages[-1] if messages else {}
+                        is_first_turn = last_msg.get("role") == "user" and isinstance(last_msg.get("content"), str)
+                        if is_first_turn:
+                            self.send_response(200); self.send_header('Content-Type', 'application/json'); self.end_headers()
+                            self.wfile.write(scenario_file.read_bytes()); return
 
-                # S4, S7, S8, S9: Handle multi-turn scenarios.
-                elif scenario_id.lower() in ['s4', 's7', 's8', 's9']:
+                # S4, S7, S8, S9, S11, S12: Handle multi-turn scenarios.
+                elif scenario_id.lower() in ['s4', 's7', 's8', 's9', 's11', 's12']:
                     try:
                         scenario_data = json.loads(scenario_file.read_text(encoding="utf-8"))
                         if isinstance(scenario_data, list):
@@ -87,7 +92,7 @@ class DynamicLLMHandler(BaseHTTPRequestHandler):
                                     MULTI_TURN_TRACKER[run_id] += 1
                                 return
 
-                            if scenario_id.lower() in ['s7', 's8', 's9']: # Sequential, then stop
+                            if scenario_id.lower() in ['s7', 's8', 's9', 's11']: # Sequential, then stop
                                 if turn_index >= len(scenario_data):
                                     # If we run out of scripted turns, end the conversation gracefully.
                                     response = {"content": [{"type": "text", "text": "Scenario ended."}]}
@@ -98,11 +103,42 @@ class DynamicLLMHandler(BaseHTTPRequestHandler):
                                 MULTI_TURN_TRACKER[run_id] += 1
                                 return
 
+                            if scenario_id.lower() == 's12':
+                                if turn_index >= len(scenario_data):
+                                    response = {"content": [{"type": "text", "text": "Scenario ended."}]}
+                                    self.send_response(200); self.send_header('Content-Type', 'application/json'); self.end_headers()
+                                    self.wfile.write(json.dumps(response).encode('utf-8'))
+                                    MULTI_TURN_TRACKER[run_id] += 1
+                                    return
+                                response = scenario_data[turn_index]
+                                full_bytes = json.dumps(response).encode('utf-8')
+                                if turn_index == 0:
+                                    # Simulate a partial / interrupted response: send the bytes
+                                    # cut off mid-stream so _salvage_json must recover them.
+                                    # We strip the _partial flag and truncate at a safe boundary
+                                    # (keep enough to form a valid partial JSON object).
+                                    response_clean = {k: v for k, v in response.items() if k != '_partial'}
+                                    full_bytes = json.dumps(response_clean).encode('utf-8')
+                                    # Cut off the last 10 bytes to corrupt / truncate the response
+                                    truncated = full_bytes[:-10]
+                                    self.send_response(200)
+                                    self.send_header('Content-Type', 'application/json')
+                                    self.send_header('Content-Length', str(len(full_bytes)))  # lie about length
+                                    self.end_headers()
+                                    self.wfile.write(truncated)
+                                    MULTI_TURN_TRACKER[run_id] += 1
+                                    return
+                                self.send_response(200); self.send_header('Content-Type', 'application/json'); self.end_headers()
+                                self.wfile.write(full_bytes)
+                                MULTI_TURN_TRACKER[run_id] += 1
+                                return
+
+
                     except json.JSONDecodeError:
                         pass # Fall through if s4.json is not a valid list
 
-                # Single-turn scenarios (S1, S2, S3)
-                elif scenario_id.lower() in ['s1', 's2', 's3']:
+                # Single-turn scenarios (S1, S2, S3, S10)
+                elif scenario_id.lower() in ['s1', 's2', 's3', 's10']:
                     last_msg = messages[-1] if messages else {}
                     is_first_turn = last_msg.get("role") == "user" and isinstance(last_msg.get("content"), str)
                     if is_first_turn:

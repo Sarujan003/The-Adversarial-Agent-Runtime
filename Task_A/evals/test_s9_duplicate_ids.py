@@ -51,8 +51,8 @@ class TestS9DuplicateIDs(unittest.TestCase):
         store = StateStore()
         events = store.get_events(run_id)
 
-        tool_started_events = [e for e in events if e['event_type'] == 'TOOL_STARTED']
-        tool_completed_events = [e for e in events if e['event_type'] == 'TOOL_COMPLETED']
+        tool_started_events = [e for e in events if e['event_type'].lower() == 'tool_started']
+        tool_completed_events = [e for e in events if e['event_type'].lower() == 'tool_completed']
 
         self.assertEqual(len(tool_started_events), 2, "Agent should have started two tools.")
         self.assertEqual(tool_started_events[0]['payload']['tool'], 'write_file')

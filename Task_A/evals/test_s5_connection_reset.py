@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from agent.loop import AgentLoop
 from agent.client import ResilientLLMClient
 
-WORKSPACE_DIR = Path("workspace").resolve()
+WORKSPACE_DIR = (Path(__file__).parent.parent / "workspace").resolve()
 
 class ScenarioLLMClient(ResilientLLMClient):
     """A client that injects scenario and run IDs into requests."""

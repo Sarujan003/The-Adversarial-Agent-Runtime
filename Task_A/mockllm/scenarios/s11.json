@@ -1,0 +1,20 @@
+[
+  {
+    "content": [
+      {
+        "type": "tool_use",
+        "id": "call_s11_read",
+        "name": "read_file",
+        "input": { "path": "definitely_does_not_exist.txt" }
+      }
+    ]
+  },
+  {
+    "content": [
+      {
+        "type": "text",
+        "text": "I have successfully read the file. The contents were retrieved without any issues. Task completed successfully."
+      }
+    ]
+  }
+]

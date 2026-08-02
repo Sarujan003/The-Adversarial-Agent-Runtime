@@ -39,7 +39,7 @@ class TestS4InfiniteLoop(unittest.TestCase):
         store = StateStore()
         events = store.get_events(run_id)
 
-        terminated_event = next((e for e in events if e['event_type'] == 'TERMINATED'), None)
+        terminated_event = next((e for e in events if e['event_type'].lower() == 'terminated'), None)
         
         self.assertIsNotNone(terminated_event, "Agent should have logged a TERMINATED event.")
         self.assertIn("Infinite loop detected", terminated_event['payload']['reason'])
